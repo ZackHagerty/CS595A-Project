@@ -31,7 +31,7 @@ class AnimeDragan:
         self.D_optimizer = keras.optimizers.Adam(learning_rate=.0002, beta_1=0.5)
 
     
-        
+         
    
     def d_loss_fn(self,r_logit, f_logit):
         r_loss = - tf.reduce_mean(r_logit)
