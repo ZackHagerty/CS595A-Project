@@ -1,147 +1,97 @@
 
 from Data import Dataset
-from GAN.Model import DRAGAN
+from GAN.Model import GAN
 import tensorflow as tf
+import numpy as np
+import os
+import PIL
+import time
 from tensorflow import keras
-import tqdm
-import functools
-import pylib as py
-import imlib as im
+from keras import Model
+from keras.optimizers import adam_v2
+from keras.layers import Input
 
 class AnimeDragan:
 
     def __init__(self):
 
-        self.model = DRAGAN()
+        self.latent_dim = 32
+        self.channels = 3
+        self.width = 64
+        self.height = 64
 
-        self.dataDirectory = "./archive/animefaces256cleaner"
-        self.batchSize = 32
-        self.datasetImageHeight = 128
-        self.datasetImageWidth = 128
+        models = GAN(self.latent_dim)
+        self.generator = models.Generator()
+        self.discriminator = models.Discriminator()
+        self.discriminator.trainable = False
+        gan_input = Input(shape=(self.latent_dim, ))
+        gan_output = self.discriminator(self.generator(gan_input))
 
-    def trainGAN(self):
+        # GAN Model
+        gan = Model(gan_input, gan_output)
+        optimizer = keras.optimizers.Adam(learning_rate = 0.0002, beta_1=0.5)
+        gan.compile(optimizer=optimizer, loss='binary_crossentropy')
 
-        self.dataset, shape, self.datasetLength = Dataset(self.dataDirectory, self.batchSize, self.datasetImageHeight, self.datasetImageWidth)
-        n_G_upsamplings = n_D_downsamplings = 4
+    def training(self, images):
+        iters = 25000
+        batch_size = 16
+        res_dir = './content/waifus'
+        file_path = '%s/generated_%d.png'
+        if not os.path.isdir(res_dir):
+            os.mkdir(res_dir)
+        control_size_sqrt = 6
+        control_vectors = np.random.normal(size=(control_size_sqrt**2, self.latent_dim)) / 2
+        start = 0
+        d_losses = []
+        a_losses = []
+        images_saved = 0
 
-        self.G = self.model.ConvGenerator(input_shape=(1, 1, 128), output_channels=shape[-1], n_upsamplings=n_G_upsamplings)
-        self.D = self.model.ConvDiscriminator(input_shape=shape, n_downsamplings=n_D_downsamplings)
-        
-        self.G_optimizer = keras.optimizers.Adam(learning_rate=.0002, beta_1=0.5)
-        self.D_optimizer = keras.optimizers.Adam(learning_rate=.0002, beta_1=0.5)
+        for step in range(iters):
+            start_time = time.time()
+            latent_vectors = np.random.normal(size=(batch_size, self.latent_dim))
+            generated = self.generator.predict(latent_vectors)
+            
+            real = images[start:start + batch_size]
+            combined_images = np.concatenate([generated, real])
+            
+            labels = np.concatenate([np.ones((batch_size, 1)), np.zeros((batch_size, 1))])
+            labels += .05 * np.random.random(labels.shape)
+            
+            d_loss = self.discriminator.train_on_batch(combined_images, labels)
+            d_losses.append(d_loss)
+            
+            latent_vectors = np.random.normal(size=(batch_size, self.latent_dim))
+            misleading_targets = np.zeros((batch_size, 1))
+            
+            a_loss = self.gan.train_on_batch(latent_vectors, misleading_targets)
+            a_losses.append(a_loss)
+            
+            start += batch_size
+            if start > images.shape[0] - batch_size:
+                start = 0
+            
+            if step % 50 == 49:
+                self.gan.save_weights('gan.h5')
+                
+                print('%d/%d: d_loss: %.4f,  a_loss: %.4f.' % (step + 1, iters, d_loss, a_loss))
+                
+                control_image = np.zeros((self.width * control_size_sqrt, self.height * control_size_sqrt, self.channels))
+                control_generated = self.generator.predict(control_vectors)
+                for i in range(control_size_sqrt ** 2):
+                    x_off = i % control_size_sqrt
+                    y_off = i // control_size_sqrt
+                    control_image[x_off * self.width:(x_off + 1) * self.width, y_off * self.height:(y_off + 1) * self.height, :] = control_generated[i, :, :, :]
+                im = PIL.Image.fromarray(np.uint8(control_image * 255))
+                im.save(file_path % (res_dir, images_saved))
+                images_saved += 1
 
+
+
+if __name__ == "__main__":
     
-         
-   
-    def d_loss_fn(self,r_logit, f_logit):
-        r_loss = - tf.reduce_mean(r_logit)
-        f_loss = tf.reduce_mean(f_logit)
-        return r_loss, f_loss
+   # modelcreation = AnimeDragan()
+    dataClass = Dataset("./archive/animefaces256cleaner", datasetImageHeight=64, datasetImageWidth=64)
 
-    def g_loss_fn(self, f_logit):
-        f_loss = - tf.reduce_mean(f_logit)
-        return f_loss
-
-    @tf.function
-    def train_G(self):
-        with tf.GradientTape() as t:
-            z = tf.random.normal(shape=(self.batchsize, 1, 1, 128))
-            x_fake = self.G(z, training=True)
-            x_fake_d_logit = self.D(x_fake, training=True)
-            G_loss = self.g_loss_fn(x_fake_d_logit)
-
-        G_grad = t.gradient(G_loss, self.G.trainable_variables)
-        self.G_optimizer.apply_gradients(zip(G_grad, self.G.trainable_variables))
-
-        return {'g_loss': G_loss}
-
-
-    @tf.function
-    def train_D(self, x_real):
-        with tf.GradientTape() as t:
-            z = tf.random.normal(shape=(self.batchsize, 1, 1, 128))
-            x_fake = self.G(z, training=True)
-
-            x_real_d_logit = self.D(x_real, training=True)
-            x_fake_d_logit = self.D(x_fake, training=True)
-
-            x_real_d_loss, x_fake_d_loss = self.d_loss_fn(x_real_d_logit, x_fake_d_logit)
-            gp = self.gradient_penalty(functools.partial(self.D, training=True), x_real, x_fake, mode='dragan')
-
-            D_loss = (x_real_d_loss + x_fake_d_loss) + gp * 10
-
-        D_grad = t.gradient(D_loss, self.D.trainable_variables)
-        self.D_optimizer.apply_gradients(zip(D_grad, self.D.trainable_variables))
-
-        return {'d_loss': x_real_d_loss + x_fake_d_loss, 'gp': gp}
-   
-    @tf.function
-    def sample(self,z):
-        return self.G(z, training=False)
-
-    def gradient_penalty(f, real, fake, mode):
-        def _gradient_penalty(f, real, fake=None):
-            def _interpolate(a, b=None):
-                if b is None:   # interpolation in DRAGAN
-                    beta = tf.random.uniform(shape=tf.shape(a), minval=0., maxval=1.)
-                    b = a + 0.5 * tf.math.reduce_std(a) * beta
-                shape = [tf.shape(a)[0]] + [1] * (a.shape.ndims - 1)
-                alpha = tf.random.uniform(shape=shape, minval=0., maxval=1.)
-                inter = a + alpha * (b - a)
-                inter.set_shape(a.shape)
-                return inter
-
-            x = _interpolate(real, fake)
-            with tf.GradientTape() as t:
-                t.watch(x)
-                pred = f(x)
-            grad = t.gradient(pred, x)
-            norm = tf.norm(tf.reshape(grad, [tf.shape(grad)[0], -1]), axis=1)
-            gp = tf.reduce_mean((norm - 1.)**2)
-
-            return gp
-
-        if mode == 'none':
-            gp = tf.constant(0, dtype=real.dtype)
-        elif mode == 'dragan':
-            gp = _gradient_penalty(f, real)
-        elif mode == 'wgan-gp':
-            gp = _gradient_penalty(f, real, fake)
-
-        return gp
-
-
-
-
-if __name__ == "__main___":
-    ep_cnt = tf.Variable(initial_value=0, trainable=False, dtype=tf.int64)
-    output = 'Saved Model'
-
-    sample_dir = py.join(output, 'samples_training')
-    py.mkdir(sample_dir)
-    train_summary_writer = tf.summary.create_file_writer(py.join(output, 'summaries', 'train'))
-
-    modelTrainer = AnimeDragan()
-    modelTrainer.trainGan()
-
-    z= tf.random.normal((100, 1, 1, 128))
-    with train_summary_writer.as_default():
-        for ep in tqdm.trange(500, desc='Epoch loop'):
-            if ep < ep_cnt:
-                continue
-
-            ep_cnt.assign_add(1)
-
-        # train for an epoch
-        for x_real in tqdm.tqdm(modelTrainer.dataset, desc='Inner Epoch Loop', total=modelTrainer.datasetLength):
-            D_loss_dict = modelTrainer.train_D(x_real)
-
-            if modelTrainer.D_optimizer.iterations.numpy() % 1 == 0:
-                G_loss_dict = modelTrainer.train_G()
-
-            # sample
-            if modelTrainer.G_optimizer.iterations.numpy() % 100 == 0:
-                x_fake = modelTrainer.sample(z)
-                img = im.immerge(x_fake, n_rows=10).squeeze()
-                im.imwrite(img, py.join(sample_dir, 'iter-%09d.jpg' % modelTrainer.G_optimizer.iterations.numpy()))
-
+    dataset = dataClass.createDataset()
+ 
+   # modelcreation.training(dataset)

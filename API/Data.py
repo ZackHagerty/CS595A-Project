@@ -16,18 +16,18 @@ class Dataset:
         self.datasetImageWidth = datasetImageWidth
 
 
+
     def createDataset(self):
-        dataset =  keras.preprocessing.image_dataset_from_directory(self.dataDirectory, label_mode = None, seed = 123,
+        trainDataset =  keras.preprocessing.image_dataset_from_directory(self.dataDirectory, seed = 123, 
                                                                          image_size = (self.datasetImageHeight, self.datasetImageWidth), 
                                                                          batch_size = self.batchSize)
 
-        normalization_layer = tf.keras.layers.Rescaling(1./255)
-        trainDataset = dataset.map(lambda x, y: (normalization_layer(x), y))
+        trainDataset = trainDataset.astype("float32") / 255.0
+        print(trainDataset.class_names)
 
-        imageShape = (self.datasetImageHeight, self.datasetImageWidth)
-        datasetLength = len(trainDataset)
-
-        return trainDataset, imageShape, datasetLength
+        
+        
+        return trainDataset
 
 
 

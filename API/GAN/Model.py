@@ -1,50 +1,83 @@
-import tensorflow as tf
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+import pandas as pd
+import PIL
+import time
+from tqdm import tqdm
 from tensorflow import keras
+from keras import Model
+from keras.optimizers import adam_v2
+from keras.layers import Conv2D, Conv2DTranspose, Dense, Dropout, Flatten, Input, LeakyReLU, Reshape, Rescaling
 
-class DRAGAN:
+class GAN:
+    
+    def __init__(self, latent_dim):
 
-    def ConvGenerator(input_shape=(1, 1, 128), output_channels=3, dimensions=128, n_upsamplings=4, name='ConvGenerator'):
-        Norm = keras.layers.LayerNormalization
+        self.latent_dim = latent_dim
+        self.channels = 3
 
-        # 0
-        h = inputs = keras.Input(shape=input_shape)
+    def Generator(self):
 
-        # 1: 1x1 -> 4x4
-        d = min(dimensions * 2 ** (n_upsamplings - 1), dimensions * 8)
-        h = keras.layers.Conv2DTranspose(d, 4, strides=1, padding='valid', use_bias=False)(h)
-        h = Norm()(h)
-        h = tf.nn.relu(h)  # or h = keras.layers.ReLU()(h)
+        gen_input = Input(shape=self.latent_dim,)
 
-        # 2: upsamplings, 4x4 -> 8x8 -> 16x16 -> ...
-        for i in range(n_upsamplings - 1):
-            d = min(dimensions * 2 ** (n_upsamplings - 2 - i), dimensions * 8)
-            h = keras.layers.Conv2DTranspose(d, 4, strides=2, padding='same', use_bias=False)(h)
-            h = Norm()(h)
-            h = tf.nn.relu(h)  # or h = keras.layers.ReLU()(h)
+            # If shape error occurs, adjust values here
+        x = Dense(64 * 8 * 8)(gen_input)
+        x = LeakyReLU()(x)
+        x = Reshape((8, 8, 64))(x)
+        
+        x = Conv2D(256, 5, padding='same')(x)
+        x = LeakyReLU()(x)
+        
+        x = Conv2DTranspose(256, 4, strides=2, padding='same')(x)
+        x = LeakyReLU()(x)
+        
+        x = Conv2DTranspose(256, 4, strides=2, padding='same')(x)
+        x = LeakyReLU()(x)
+        
+        x = Conv2DTranspose(256, 4, strides=2, padding='same')(x)
+        x = LeakyReLU()(x)
+        
+        x = Conv2D(512, 5, padding='same')(x)
+        x = LeakyReLU()(x)
+        x = Conv2D(512, 5, padding='same')(x)
+        x = LeakyReLU()(x)
+        x = Conv2D(self.channels, 7, activation='tanh', padding='same')(x)
+        # print(x.shape)
+        
+        generator = Model(gen_input, x)
+        return generator
 
-        h = keras.layers.Conv2DTranspose(output_channels, 4, strides=2, padding='same')(h)
-        h = tf.tanh(h)  # or h = keras.layers.Activation('tanh')(h)
+    def Discriminator(self):
 
-        return keras.Model(inputs=inputs, outputs=h, name=name)
-
-
-    def ConvDiscriminator(input_shape=(256, 265, 3), dimensions=128, n_downsamplings=4, name='ConvDiscriminator'):
-
-        Norm = keras.layers.LayerNormalization
-        # 0
-        h = inputs = keras.Input(shape=input_shape)
-
-        # 1: downsamplings, ... -> 16x16 -> 8x8 -> 4x4
-        h = keras.layers.Conv2D(dimensions, 4, strides=2, padding='same')(h)
-        h = tf.nn.leaky_relu(h, alpha=0.2)  # or keras.layers.LeakyReLU(alpha=0.2)(h)
-
-        for i in range(n_downsamplings - 1):
-            d = min(dimensions * 2 ** (i + 1), dimensions * 8)
-            h = keras.layers.Conv2D(d, 4, strides=2, padding='same', use_bias=False)(h)
-            h = Norm()(h)
-            h = tf.nn.leaky_relu(h, alpha=0.2)  # or h = keras.layers.LeakyReLU(alpha=0.2)(h)
-
-        # 2: logit
-        h = keras.layers.Conv2D(1, 4, strides=1, padding='valid')(h)
-
-        return keras.Model(inputs=inputs, outputs=h, name=name)
+        dis_input = Input(shape=(64, 64, self.channels))
+  
+        x = Conv2D(256, 3)(dis_input)
+        x = LeakyReLU()(x)
+    
+        x = Conv2D(256, 4, strides=2)(x)
+        x = LeakyReLU()(x)
+        
+        x = Conv2D(256, 4, strides=2)(x)
+        x = LeakyReLU()(x)
+        
+        x = Conv2D(256, 4, strides=2)(x)
+        x = LeakyReLU()(x)
+        
+        x = Conv2D(256, 4, strides=2)(x)
+        x = LeakyReLU()(x)
+        
+        x = Flatten()(x)
+        x = Dropout(0.4)(x)
+        
+        x = Dense(1, activation='sigmoid')(x)
+        discriminator = Model(dis_input, x)
+        
+        optimizer = keras.optimizers.Adam(learning_rate = 0.0002, beta_1=0.5)
+        
+        discriminator.compile(
+            optimizer=optimizer,
+            loss='binary_crossentropy'
+        )
+        
+        return discriminator
